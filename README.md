@@ -17,3 +17,4 @@ cd ../docker
 docker-compose up -d
 ```
 
+初版，应该还有不少问题。
