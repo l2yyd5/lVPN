@@ -1,0 +1,15 @@
+{
+    "tls_config": {
+        "caCert": "certs/ca/ca.crt",
+		"clientCert": "certs/client/client.crt",
+		"clientKey": "certs/client/client.key",
+		"serverCert": "certs/server/server.crt",
+		"serverKey": "certs/server/server.key"
+    },
+    "server_config": {
+        "tunAddr": "192.168.53.1",
+        "tunMask": "24",
+        "listenAddr": "0.0.0.0",
+        "listenPort": 4433
+    }
+}

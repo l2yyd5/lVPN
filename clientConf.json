@@ -1,0 +1,16 @@
+{
+    "tls_config": {
+        "caCert": "certs/ca/ca.crt",
+		"clientCert": "certs/client/client.crt",
+		"clientKey": "certs/client/client.key",
+		"serverCert": "certs/server/server.crt",
+		"serverKey": "certs/server/server.key"
+    },
+    "client_config": {
+        "serverHostName": "xxxxx",
+        "serverAddr": "10.0.2.8",
+        "serverPort": 4433,
+        "username": "xxxxx",
+        "password": "xxxxx"
+    }
+}

@@ -1,0 +1,77 @@
+version: "3.9"
+
+services:
+  hostu:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile
+    container_name: host-10.0.2.7
+    network_mode: "extranet"
+    privileged: true
+    tty: true
+    cap_add:
+      - ALL
+    networks:
+      extranet:
+        ipv4_address: 10.0.2.7
+    command: bash -c "
+              mkdir /task3/logs &&
+              ip route del default  &&
+              service vsftpd start &&
+              service openbsd-inetd start &&
+              tail -f"
+
+  hostc:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile
+    container_name: host-10.0.2.6
+    network_mode: "extranet"
+    privileged: true
+    tty: true
+    cap_add:
+      - ALL
+    networks:
+      extranet:
+        ipv4_address: 10.0.2.6
+    command: bash -c "
+              mkdir /task3/logs &&
+              ip route del default  &&
+              service vsftpd start &&
+              service openbsd-inetd start &&
+              tail -f"
+
+  hostv:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile
+    container_name: host-192.168.60.101 
+    network_mode: "intranet"
+    privileged: true
+    tty: true
+    cap_add:
+      - ALL
+    networks:
+      intranet:
+        ipv4_address: 192.168.60.101
+    command: bash -c "
+              ip route del default  &&
+              route add -net 192.168.53.0/24 gw 192.168.60.1 &&
+              service vsftpd start &&
+              service openbsd-inetd start &&
+              tail -f"
+
+networks:
+  extranet:
+    name: docker1
+    ipam:
+      config:
+      - subnet: 10.0.2.0/24
+        gateway: 10.0.2.8
+
+  intranet:
+    name: docker2
+    ipam:
+      config:
+      - subnet: 192.168.60.0/24
+        gateway: 192.168.60.1
