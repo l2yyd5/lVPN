@@ -29,7 +29,6 @@ const size_t BUFFER_SIZE = 2048;
 
 class lVPNclient : public LNET::noncopyable {
 public:
-  using EventList = std::vector<epoll_event>;
   explicit lVPNclient(lConfig::clientConfig ccfg, LNET::AsyncLogging *log);
   ~lVPNclient();
 
@@ -44,7 +43,7 @@ private:
   int _socketFd;
   int _tunFd;
 
-  EventList _events;
+  epoll_event _events[MAX_EVENTS];
   lConfig::clientConfig _ccfg;
   SSL *_ssl;
   string _tunIP;

@@ -147,7 +147,7 @@ void addEvent(int epollFd, int fd, int state) {
 
 lVPNclient::lVPNclient(lConfig::clientConfig ccfg, LNET::AsyncLogging *log)
     : _ccfg(ccfg), _asynclog(log), _ssl(setupTLSClient(ccfg)),
-      _socketFd(setupTCPClient(ccfg)), _events(MAX_EVENTS) {
+      _socketFd(setupTCPClient(ccfg)), _epollFd(-1) {
   assert(_ssl != nullptr);
   assert(_socketFd >= 0);
 }
@@ -163,8 +163,8 @@ void lVPNclient::handleSSLRead() {
   ::bzero(buffer, BUFFER_SIZE);
   int len = ::SSL_read(_ssl, buffer, BUFFER_SIZE);
   if (len > 0) {
-    LOG_INFO << "Got a packet " << len << " bytes from from the tunnel.\n";
     ::write(_tunFd, buffer, len);
+    LOG_INFO << "Got a packet " << len << " bytes from from the tunnel.\n";
   } else if (len == 0) {
     LOG_INFO << "Socket fd: " << _socketFd << ". ssl link error!\n";
     _asynclog->stop();
@@ -181,13 +181,16 @@ void lVPNclient::handleTunRead() {
   char buffer[BUFFER_SIZE];
   ::bzero(buffer, BUFFER_SIZE);
   int len = ::read(_tunFd, buffer, BUFFER_SIZE);
-  const void *peek = buffer;
-  const iphdr *_iphdr = static_cast<const iphdr *>(peek);
+  if (len > 0) {
+    SSL_write(_ssl, buffer, len);
+    const void *peek = buffer;
+    const iphdr *_iphdr = static_cast<const iphdr *>(peek);
 
-  char IPstr[INET_ADDRSTRLEN];
-  ::inet_ntop(AF_INET, &_iphdr->daddr, IPstr, sizeof(IPstr));
-  LOG_INFO << "Got a packet " << len << " bytes from Tun to " << IPstr << "\n";
-  SSL_write(_ssl, buffer, len);
+    char IPstr[INET_ADDRSTRLEN];
+    ::inet_ntop(AF_INET, &_iphdr->daddr, IPstr, sizeof(IPstr));
+    LOG_INFO << "Got a packet " << len << " bytes from Tun to " << IPstr
+             << "\n";
+  }
 }
 
 int lVPNclient::handleEvents(int numEvents) {
@@ -199,10 +202,8 @@ int lVPNclient::handleEvents(int numEvents) {
       handleTunRead();
     } else if (fd == _socketFd) {
       handleSSLRead();
-    } else if (_events[i].events & EPOLLHUP) {
-      std::cerr << "EPOLLHUP, error.\n";
-      return -1;
     } else {
+      std::cerr << "EPOLL error.\n";
       return -1;
     }
   }
@@ -240,9 +241,10 @@ void lVPNclient::run() {
   addEvent(_epollFd, _tunFd, EPOLLIN);
 
   while (1) {
-    int numEvents = ::epoll_wait(_epollFd, &*_events.begin(), MAX_EVENTS, -1);
+    int numEvents = ::epoll_wait(_epollFd, _events, MAX_EVENTS, -1);
     if (numEvents > 0) {
-      if (handleEvents(numEvents) == -1) {
+      int ret = handleEvents(numEvents);
+      if (ret == -1) {
         LOG_INFO << "Connect error!\n";
         break;
       }

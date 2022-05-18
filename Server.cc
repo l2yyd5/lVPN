@@ -10,30 +10,30 @@ string confFileName = "serverConf.json";
 json sConf;
 
 int main(int argc, char *argv[]) {
-  switch (fork()) {
-  case -1:
-    printf("fork() failed\n");
-    exit(0);
-  case 0:
-    break;
-  default:
-    exit(0);
-  }
+  // switch (fork()) {
+  // case -1:
+  //   printf("fork() failed\n");
+  //   exit(0);
+  // case 0:
+  //   break;
+  // default:
+  //   exit(0);
+  // }
 
-  if (setsid() == -1) {
-    printf("setsid() failed\n");
-    exit(0);
-  }
+  // if (setsid() == -1) {
+  //   printf("setsid() failed\n");
+  //   exit(0);
+  // }
 
-  switch (fork()) {
-  case -1:
-    printf("fork() failed\n");
-    exit(0);
-  case 0:
-    break;
-  default:
-    exit(0);
-  }
+  // switch (fork()) {
+  // case -1:
+  //   printf("fork() failed\n");
+  //   exit(0);
+  // case 0:
+  //   break;
+  // default:
+  //   exit(0);
+  // }
 
   if (argc > 1) {
     confFileName = argv[1];

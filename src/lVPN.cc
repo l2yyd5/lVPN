@@ -155,6 +155,7 @@ void lVPNsrv::_acceptConnection() {
 }
 
 void lVPNsrv::_closeConnection(tlsTool *tool) {
+  // std::cout << "close start" << std::endl;
   int fd = tool->getFd();
   _epoll->del(fd, tool, 0);
 
@@ -174,6 +175,7 @@ void lVPNsrv::_closeConnection(tlsTool *tool) {
 
   delete tool;
   tool = nullptr;
+  // std::cout << "close end" << std::endl;
 }
 
 void lVPNsrv::_handleSSLRead(tlsTool *tool) {
@@ -185,7 +187,12 @@ void lVPNsrv::_handleSSLRead(tlsTool *tool) {
     _closeConnection(tool);
     return;
   }
-  if (!tool->isVerified()) {
+  if(tool->isVerified()) {
+    write(_tunFd, buffer, len);
+    LOG_INFO << "Got a packet from the tunnel. Received " << len
+             << " bytes data from " << _ipMap[fd] << "\n";
+  }
+  else {
     if (len <= 20) {
       string errorMessage =
           "Authentication information from " + _ipMap[fd] + " error.\n";
@@ -225,10 +232,6 @@ void lVPNsrv::_handleSSLRead(tlsTool *tool) {
       char retErr = static_cast<char>(errorCode::INFORMATION_ERROR);
       tool->writeSSL(&retErr, 1);
     }
-  } else {
-    LOG_INFO << "Got a packet from the tunnel. Received " << len
-             << " bytes data from " << _ipMap[fd] << "\n";
-    write(_tunFd, buffer, len);
   }
 }
 
