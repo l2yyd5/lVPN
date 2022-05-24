@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22.2)
 
-project(MiniVPN VERSION 0.1.0)
+project(lVPN VERSION 0.2.0)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/)
 set(CXX_FLAGS
