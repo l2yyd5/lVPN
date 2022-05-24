@@ -99,9 +99,7 @@ int setupTCPServer(const lConfig::serverConfig &scfg) {
 
 lVPNsrv::lVPNsrv(lConfig::serverConfig scfg, LNET::AsyncLogging *log)
     : _scfg(scfg), _tunFd(createTunDevice(scfg)),
-      _listenFd(setupTCPServer(scfg)), _asynclog(log),
-      _listenTCP(new tlsTool(_listenFd)), _listenTun(new tlsTool(_tunFd)),
-      _epoll(new Epoll) {
+      _listenFd(setupTCPServer(scfg)), _asynclog(log), _epoll(new Epoll[3]) {
   assert(_listenFd >= 0);
   assert(_tunFd >= 0);
 
@@ -120,7 +118,7 @@ lVPNsrv::~lVPNsrv() {
   _asynclog->stop();
 }
 
-void lVPNsrv::_acceptConnection() {
+void lVPNsrv::_acceptConnection(int fd) {
   sockaddr_in clientAddr{};
   socklen_t len = sizeof(clientAddr);
   int acceptFd;
@@ -140,76 +138,71 @@ void lVPNsrv::_acceptConnection() {
                << "\n";
       ERR_print_errors_fp(stderr);
     } else {
-      tlsTool *tool = new tlsTool(acceptFd, tmpSSL);
-
       char clientIP[INET_ADDRSTRLEN];
       ::inet_ntop(AF_INET, &clientAddr.sin_addr.s_addr, clientIP,
                   sizeof(clientIP));
       _ipMap[acceptFd] = clientIP;
+      _loginMap[acceptFd] = false;
+      _SSLMap[acceptFd] = tmpSSL;
       ::fcntl(acceptFd, F_SETFL, fcntl(acceptFd, F_GETFL, 0) | O_NONBLOCK);
-      _epoll->add(acceptFd, tool, EPOLLIN);
-      tool->setState(1);
+      _epoll[2].add(acceptFd, EPOLLIN);
       LOG_INFO << "Accept from " << clientIP << ". Complete SSL connection\n";
     }
   }
 }
 
-void lVPNsrv::_closeConnection(tlsTool *tool) {
-  // std::cout << "close start" << std::endl;
-  int fd = tool->getFd();
-  _epoll->del(fd, tool, 0);
+void lVPNsrv::_closeConnection(int fd) {
+  _epoll[2].del(fd, 0);
 
-  auto it = _tunIPMap.find(fd);
-  if (it != _tunIPMap.end()) {
+  auto it1 = _loginMap.find(fd);
+  if (it1 != _loginMap.end()) {
+    _ipMap.erase(fd);
+    _loginMap.erase(fd);
+    _SSLMap.erase(fd);
+  }
+
+  auto it2 = _tunIPMap.find(fd);
+  if (it2 != _tunIPMap.end()) {
     string clientIP = _tunIPMap[fd];
     in_addr_t tmp;
     ::inet_pton(AF_INET, clientIP.c_str(), &tmp);
     _tunIPMap.erase(fd);
-    _fdMap.erase(clientIP);
+    _tunMap.erase(clientIP);
     _tunIdSet.insert(tmp);
   }
-  it = _ipMap.find(fd);
-  if (it != _ipMap.end()) {
-    _ipMap.erase(fd);
-  }
-
-  delete tool;
-  tool = nullptr;
-  // std::cout << "close end" << std::endl;
 }
 
-void lVPNsrv::_handleSSLRead(tlsTool *tool) {
-  int fd = tool->getFd();
+void lVPNsrv::_handleSSLRead(int fd) {
   char buffer[BUFFER_SIZE];
-  int len = tool->readSSL(buffer);
+  SSL *ssl = _SSLMap[fd];
+  int len = SSL_read(ssl, buffer, BUFFER_SIZE);
   if (len == 0 || (len < 0) && (errno != EAGAIN)) {
     LOG_INFO << "close socket fd: " << fd << "\n";
-    _closeConnection(tool);
+    _closeConnection(fd);
     return;
   }
-  if(tool->isVerified()) {
-    write(_tunFd, buffer, len);
+  if (_loginMap[fd]) {
+    ::write(_tunFd, buffer, len);
     LOG_INFO << "Got a packet from the tunnel. Received " << len
              << " bytes data from " << _ipMap[fd] << "\n";
-  }
-  else {
+  } else {
     if (len <= 20) {
       string errorMessage =
           "Authentication information from " + _ipMap[fd] + " error.\n";
       LOG_INFO << errorMessage;
       char retErr = static_cast<char>(errorCode::INFORMATION_ERROR);
-      tool->writeSSL(&retErr, 1);
+      SSL_write(ssl, &retErr, 1);
       return;
     }
     try {
-      auto info = json::parse(buffer, buffer + len);
+      json info = json::parse(buffer, buffer + len);
       string username = info["username"];
       string password = info["password"];
       int ret = verifyInfo(username, password);
       if (ret == -1) {
         LOG_INFO << "Wrong user name or password. " << _ipMap[fd] << "\n";
         char retErr = static_cast<char>(errorCode::AUTHENTICATION_FAILED);
-        tool->writeSSL(&retErr, 1);
+        SSL_write(ssl, &retErr, 1);
       } else {
         LOG_INFO << _ipMap[fd] << " succeeded login.\n";
         string retMsg = "";
@@ -217,11 +210,10 @@ void lVPNsrv::_handleSSLRead(tlsTool *tool) {
         char tmpIP[INET_ADDRSTRLEN];
         ::inet_ntop(AF_INET, &*_tunIdSet.begin(), tmpIP, sizeof(tmpIP));
         retMsg += tmpIP;
+        SSL_write(ssl, retMsg.c_str(), retMsg.length());
         _tunIPMap[fd] = tmpIP;
-        _fdMap[tmpIP] = tool;
-
-        tool->writeSSL(retMsg.c_str(), retMsg.length());
-        tool->setState(2);
+        _tunMap[tmpIP] = fd;
+        _loginMap[fd] = true;
         _tunIdSet.erase(_tunIdSet.begin());
       }
     } catch (json::parse_error &ex) {
@@ -230,47 +222,71 @@ void lVPNsrv::_handleSSLRead(tlsTool *tool) {
       LOG_INFO << errorMessage;
       LOG_INFO << buffer << "\n";
       char retErr = static_cast<char>(errorCode::INFORMATION_ERROR);
-      tool->writeSSL(&retErr, 1);
+      SSL_write(ssl, &retErr, 1);
     }
   }
 }
 
-void lVPNsrv::_handleTunRead() {
+void lVPNsrv::_handleTunRead(int tunfd) {
   char buff[BUFFER_SIZE];
-  int len = read(_tunFd, buff, BUFFER_SIZE);
+  int len = ::read(tunfd, buff, BUFFER_SIZE);
   if (len >= 20) {
     const void *peek = buff;
     const iphdr *_iphdr = static_cast<const iphdr *>(peek);
-
     char IPstr[INET_ADDRSTRLEN];
     ::inet_ntop(AF_INET, &_iphdr->daddr, IPstr, sizeof(IPstr));
-    auto it = _fdMap.find(IPstr);
-    if (it != _fdMap.end()) {
-      auto tool = it->second;
-      if (tool->isVerified()) {
-        tool->writeSSL(buff, len);
+    auto it = _tunMap.find(IPstr);
+    if (it != _tunMap.end()) {
+      int fd = it->second;
+      if (_loginMap[fd]) {
+        SSL *ssl = _SSLMap[fd];
+        SSL_write(ssl, buff, len);
       }
+      LOG_INFO << "Got a packet " << len << " bytes from Tun to " << IPstr
+               << "\n";
     }
-    LOG_INFO << "Got a packet " << len << " bytes from Tun to " << IPstr
-             << "\n";
+  }
+}
+
+void lVPNsrv::_tunThreadFunc() {
+  _epoll[1].add(_tunFd, EPOLLIN);
+  _epoll[1].setHandleRead(
+      std::bind(&lVPNsrv::_handleTunRead, this, std::placeholders::_1));
+  while (1) {
+    int eventsnum = _epoll[1].wait(3);
+    if (eventsnum > 0) {
+      _epoll[1].handleEvents(eventsnum);
+    }
+  }
+}
+
+void lVPNsrv::_SSLThreadFunc() {
+  _epoll[2].setHandleRead(
+      std::bind(&lVPNsrv::_handleSSLRead, this, std::placeholders::_1));
+  while (1) {
+    int eventsnum = _epoll[2].wait(3);
+    if (eventsnum > 0) {
+      _epoll[2].handleEvents(eventsnum);
+    }
   }
 }
 
 void lVPNsrv::run() {
-  _epoll->add(_listenFd, _listenTCP.get(), EPOLLIN);
-  _epoll->add(_tunFd, _listenTun.get(), EPOLLIN);
+  sleep(1);
+  _epoll[0].add(_listenFd, EPOLLIN);
+  _epoll[0].setHandleRead(
+      std::bind(&lVPNsrv::_acceptConnection, this, std::placeholders::_1));
 
-  _epoll->setNewConnection(std::bind(&lVPNsrv::_acceptConnection, this));
-  _epoll->setHandleSSLRead(
-      std::bind(&lVPNsrv::_handleSSLRead, this, std::placeholders::_1));
-  _epoll->setHandleTunRead(std::bind(&lVPNsrv::_handleTunRead, this));
-  _epoll->setCloseConnection(
-      std::bind(&lVPNsrv::_closeConnection, this, std::placeholders::_1));
+  std::thread tmp1(std::bind(&lVPNsrv::_tunThreadFunc, this));
+  _thread[0].swap(tmp1);
+
+  std::thread tmp2(std::bind(&lVPNsrv::_SSLThreadFunc, this));
+  _thread[1].swap(tmp1);
 
   while (1) {
-    int eventsnum = _epoll->wait(-1);
+    int eventsnum = _epoll[0].wait(3);
     if (eventsnum > 0) {
-      _epoll->handleEvents(_listenFd, _tunFd, eventsnum);
+      _epoll[0].handleEvents(eventsnum);
     }
   }
 }

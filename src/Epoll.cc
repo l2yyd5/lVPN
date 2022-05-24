@@ -14,11 +14,11 @@ bool Epoll::create(int flag) {
   return true;
 }
 
-bool Epoll::add(int fd, void *data, int event) {
+bool Epoll::add(int fd, int event) {
   if (isEpollValid()) {
     epoll_event ep_event{};
     ep_event.events = event;
-    ep_event.data.ptr = data;
+    ep_event.data.fd = fd;
 
     int ret = ::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ep_event) != -1;
     if (!ret)
@@ -28,11 +28,11 @@ bool Epoll::add(int fd, void *data, int event) {
   return false;
 }
 
-bool Epoll::modify(int fd, void *data, int event) {
+bool Epoll::modify(int fd, int event) {
   if (isEpollValid()) {
     epoll_event ep_event{};
     ep_event.events = event;
-    ep_event.data.ptr = data;
+    ep_event.data.fd = fd;
 
     int ret = ::epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ep_event) != -1;
     if (!ret)
@@ -43,11 +43,11 @@ bool Epoll::modify(int fd, void *data, int event) {
   return false;
 }
 
-bool Epoll::del(int fd, void *data, int event) {
+bool Epoll::del(int fd, int event) {
   if (isEpollValid()) {
     epoll_event ep_event{};
     ep_event.events = event;
-    ep_event.data.ptr = data;
+    ep_event.data.fd = fd;
 
     int ret = ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, &ep_event) != -1;
     if (!ret)
@@ -73,21 +73,12 @@ void Epoll::destroy() {
   epoll_fd_ = -1;
 }
 
-void Epoll::handleEvents(int listenfd, int tunfd, int eventsnum) {
+void Epoll::handleEvents(int eventsnum) {
   assert(eventsnum > 0);
   for (int i = 0; i < eventsnum; i++) {
-    tlsTool *tlstool = static_cast<tlsTool *>(_events[i].data.ptr);
-    int fd = tlstool->getFd();
-    if (fd == listenfd) {
-      _connectionCB();
-    } else if (fd == tunfd) {
-      _tunReadCB();
-    } else if (_events[i].events & EPOLLIN) {
-      _sslReadCB(tlstool);
-    } else if (_events[i].events & EPOLLRDHUP) {
-      _closeCB(tlstool);
-    } else {
-      _closeCB(tlstool);
+    int fd = _events[i].data.fd;
+    if (_events[i].events & EPOLLIN) {
+      _ReadCB(fd);
     }
   }
   return;

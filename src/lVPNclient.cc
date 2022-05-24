@@ -3,7 +3,7 @@
 const SSL_METHOD *g_meth;
 SSL_CTX *g_sslCtx;
 
-void verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx) {
+int verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx) {
   char buf[300];
   X509 *cert = X509_STORE_CTX_get_current_cert(x509_ctx);
 
@@ -12,11 +12,14 @@ void verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx) {
 
   if (preverify_ok == 1) {
     LOG_INFO << "Verification passed.\n";
+    return 1;
   } else {
     int err = X509_STORE_CTX_get_error(x509_ctx);
     LOG_INFO << "Verification failed: " << X509_verify_cert_error_string(err)
              << "\n";
+    return 0;
   }
+
 }
 
 SSL *setupTLSClient(const lConfig::clientConfig &ccfg) {
@@ -29,20 +32,22 @@ SSL *setupTLSClient(const lConfig::clientConfig &ccfg) {
   g_meth = TLS_client_method();
   g_sslCtx = SSL_CTX_new(g_meth);
 
-  SSL_CTX_set_verify(g_sslCtx, SSL_VERIFY_NONE, NULL);
+  SSL_CTX_set_verify(g_sslCtx, SSL_VERIFY_PEER, verify_callback);
+  SSL_CTX_load_verify_locations(g_sslCtx, ccfg.tls_config.caCert.c_str(), nullptr);
+
   if (SSL_CTX_use_certificate_file(g_sslCtx, ccfg.tls_config.clientCert.c_str(),
                                    SSL_FILETYPE_PEM) <= 0) {
     ERR_print_errors_fp(stderr);
-    exit(-2);
+    ::exit(-2);
   }
   if (SSL_CTX_use_PrivateKey_file(g_sslCtx, ccfg.tls_config.clientKey.c_str(),
                                   SSL_FILETYPE_PEM) <= 0) {
     ERR_print_errors_fp(stderr);
-    exit(-3);
+    ::exit(-3);
   }
   if (!SSL_CTX_check_private_key(g_sslCtx)) {
     LOG_INFO << "Private key does not match the certificate public keyn\n";
-    exit(-4);
+    ::exit(-4);
   }
   ssl = SSL_new(g_sslCtx);
   X509_VERIFY_PARAM *vpm = SSL_get0_param(ssl);
@@ -54,8 +59,6 @@ SSL *setupTLSClient(const lConfig::clientConfig &ccfg) {
 int setupTCPClient(const lConfig::clientConfig &ccfg) {
   struct sockaddr_in server_addr;
   int sockfd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  int options = fcntl(sockfd, F_GETFL, 0);
-  fcntl(sockfd, F_SETFL, options | O_NONBLOCK);
 
   ::memset(&server_addr, '\0', sizeof(server_addr));
   ::inet_pton(AF_INET, ccfg.serverAddr.c_str(), &(server_addr.sin_addr.s_addr));
@@ -86,7 +89,6 @@ string loginVerify(SSL *ssl, const lConfig::clientConfig &ccfg) {
   if (len <= 0) {
     return "\x01";
   }
-  printf("%d %s\n", (int)buffer[0], buffer + 1);
   if (buffer[0] == 3) {
     string IPstr(buffer + 1, buffer + len);
     return string(IPstr);
@@ -101,7 +103,7 @@ int setupTunClient(string addr) {
 
   ::memset(&ifr, 0, sizeof(ifr));
   ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
-  tunfd = open("/dev/net/tun", O_RDWR);
+  tunfd = ::open("/dev/net/tun", O_RDWR);
   if (tunfd == -1) {
     LOG_INFO << "Open TUN failed! (" << errno << ": " << ::strerror(errno)
              << "\n";
@@ -109,8 +111,8 @@ int setupTunClient(string addr) {
   }
 
   string deviceName = "tun-client";
-  strncpy(ifr.ifr_name, deviceName.c_str(), IFNAMSIZ);
-  ret = ioctl(tunfd, TUNSETIFF, &ifr);
+  ::strncpy(ifr.ifr_name, deviceName.c_str(), IFNAMSIZ);
+  ret = ::ioctl(tunfd, TUNSETIFF, &ifr);
   if (ret == -1) {
     LOG_INFO << "Setup TUN interface by ioctl failed! (" << errno << ": "
              << ::strerror(errno) << "\n";
@@ -160,7 +162,6 @@ lVPNclient::~lVPNclient() {
 
 void lVPNclient::handleSSLRead() {
   char buffer[BUFFER_SIZE];
-  ::bzero(buffer, BUFFER_SIZE);
   int len = ::SSL_read(_ssl, buffer, BUFFER_SIZE);
   if (len > 0) {
     ::write(_tunFd, buffer, len);
@@ -168,18 +169,17 @@ void lVPNclient::handleSSLRead() {
   } else if (len == 0) {
     LOG_INFO << "Socket fd: " << _socketFd << ". ssl link error!\n";
     _asynclog->stop();
-    exit(0);
+    ::exit(0);
   } else {
     LOG_INFO << "Socket fd: " << _socketFd << "ssl read error!\n";
     LOG_INFO << "Socket fd: " << _socketFd << strerror(errno) << "\n";
     _asynclog->stop();
-    exit(0);
+    ::exit(0);
   }
 }
 
 void lVPNclient::handleTunRead() {
   char buffer[BUFFER_SIZE];
-  ::bzero(buffer, BUFFER_SIZE);
   int len = ::read(_tunFd, buffer, BUFFER_SIZE);
   if (len > 0) {
     SSL_write(_ssl, buffer, len);
@@ -225,7 +225,6 @@ void lVPNclient::run() {
 
   _tunIP = loginVerify(_ssl, _ccfg);
 
-  std::cout << _tunIP << std::endl;
   if (_tunIP.length() <= 8) {
     if (_tunIP[0] == 2) {
       LOG_INFO << "Login failed. Username or password error.\n";
